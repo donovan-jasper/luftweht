@@ -280,3 +280,5 @@ MIT License - see LICENSE file for details
 - [RustScan](https://github.com/RustScan/RustScan) - Fast port scanner (primary scanning tool)
 - [nmap](https://nmap.org/) - Network exploration and security auditing (used via rustscan passthrough)
 - Built with [Tokio](https://tokio.rs/) async runtime
+
+## Was weht?

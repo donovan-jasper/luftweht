@@ -1,0 +1,42 @@
+# Rust build artifacts
+/target
+# Cargo.lock - keep this for reproducible binary builds
+
+# Scan output directories
+output/
+scan-results/
+results/
+
+# Log files
+*.log
+
+# Scan data files
+*.ndjson
+*.json
+*.md
+!README.md
+!SAFE-SCANNING.md
+!LICENSE.md
+
+# State files for resume
+*.state
+
+# Temporary scan files
+scan-*.log
+test-*.log
+cidr-*.log
+
+# System files
+.DS_Store
+*.swp
+*.swo
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# Backup files
+*.bak
+*.backup

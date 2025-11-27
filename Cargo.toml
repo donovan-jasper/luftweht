@@ -8,6 +8,7 @@ description = "Intelligent network scanner with phased discovery and info gather
 [dependencies]
 # Async runtime
 tokio = { version = "1.40", features = ["full"] }
+futures = "0.3"
 
 # CLI
 clap = { version = "4.5", features = ["derive", "cargo"] }
@@ -38,3 +39,4 @@ governor = "0.6"
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.10", features = ["v4", "serde"] }
+rand = "0.8"

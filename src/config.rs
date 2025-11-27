@@ -34,6 +34,10 @@ pub struct Config {
     #[arg(long, default_value = "5000")]
     pub timeout: u64,
 
+    /// Maximum scan time in seconds before forcing completion
+    #[arg(long, default_value = "1800")]
+    pub scan_timeout_secs: u64,
+
     /// Disable vulnerability scanning
     #[arg(long)]
     pub no_vuln_scan: bool,
@@ -103,6 +107,8 @@ pub struct Config {
 pub enum ScanMode {
     /// Quick discovery + top ports only
     Fast,
+    /// Host discovery only, no port/service scanning
+    DiscoverOnly,
     /// Full discovery, no deep ports
     Discover,
     /// Complete pipeline: Discovery → Port Scan → Info → Vuln

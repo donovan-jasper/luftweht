@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
     tokio::spawn(handle_events(event_receiver, stream_writer.clone()));
 
     // Spawn job workers
-    spawn_workers(
+    let mut completion_rx = spawn_workers(
         job_receiver,
         discovery_engine,
         portscan_engine,
@@ -115,6 +115,9 @@ async fn main() -> Result<()> {
         ScanMode::Fast => {
             execute_fast_mode(&config, &job_queue, &targets).await?;
         }
+        ScanMode::DiscoverOnly => {
+            execute_discover_only_mode(&config, &job_queue, &targets).await?;
+        }
         ScanMode::Discover => {
             execute_discover_mode(&config, &job_queue, &targets).await?;
         }
@@ -124,8 +127,60 @@ async fn main() -> Result<()> {
     }
 
     // Wait for jobs to complete
-    info!("Waiting for scan to complete...");
-    tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+    match config.mode {
+        ScanMode::DiscoverOnly => {
+            info!("Waiting for all discovery methods to complete...");
+
+            let expected_completions = 4; // TCP Connect, ICMP, ARP, TCP SYN
+            let mut completed = 0;
+
+            let timeout_duration = tokio::time::Duration::from_secs(std::cmp::min(config.scan_timeout_secs, 300));
+            let deadline = tokio::time::Instant::now() + timeout_duration;
+
+            while completed < expected_completions {
+                match tokio::time::timeout_at(deadline, completion_rx.recv()).await {
+                    Ok(Some(job_type)) => {
+                        completed += 1;
+                        info!("{} completed ({}/{})", job_type, completed, expected_completions);
+                    }
+                    Ok(None) => {
+                        tracing::warn!("Completion channel closed early ({}/{})", completed, expected_completions);
+                        break;
+                    }
+                    Err(_) => {
+                        tracing::warn!("Discovery timed out after {}s ({}/{} completed)",
+                            timeout_duration.as_secs(), completed, expected_completions);
+                        break;
+                    }
+                }
+            }
+
+            // Brief pause for final events to be written
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        }
+        ScanMode::Fast => {
+            info!("Waiting for discovery to complete...");
+            // Wait for discovery completion signal with timeout
+            let timeout_duration = tokio::time::Duration::from_secs(std::cmp::min(config.scan_timeout_secs, 300));
+            match tokio::time::timeout(timeout_duration, completion_rx.recv()).await {
+                Ok(Some(job_type)) => {
+                    info!("{} completed successfully", job_type);
+                    // Give a brief moment for final events to be written
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+                Ok(None) => {
+                    info!("Completion channel closed");
+                }
+                Err(_) => {
+                    info!("Discovery timed out after {}s", timeout_duration.as_secs());
+                }
+            }
+        }
+        _ => {
+            info!("Waiting for scan to complete (timeout: {}s)...", config.scan_timeout_secs);
+            tokio::time::sleep(tokio::time::Duration::from_secs(config.scan_timeout_secs)).await;
+        }
+    }
 
     // Generate final reports
     let end_time = chrono::Utc::now();
@@ -221,15 +276,20 @@ fn spawn_workers(
     portscan: Arc<PortScanEngine>,
     infogather: Arc<InfoGatherEngine>,
     vulnscan: Arc<VulnScanEngine>,
-) {
+) -> mpsc::UnboundedReceiver<String> {
+    let (completion_tx, completion_rx) = mpsc::unbounded_channel();
+
     tokio::spawn(async move {
         while let Some(job) = job_rx.recv().await {
             match job {
                 Job::Discovery(j) => {
                     let engine = discovery.clone();
+                    let tx = completion_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = engine.execute(j).await {
                             error!("Discovery job failed: {}", e);
+                        } else {
+                            let _ = tx.send("Discovery".to_string());
                         }
                     });
                 }
@@ -260,6 +320,8 @@ fn spawn_workers(
             }
         }
     });
+
+    completion_rx
 }
 
 async fn execute_fast_mode(
@@ -281,6 +343,66 @@ async fn execute_fast_mode(
 
     job_queue.submit(job)?;
 
+    Ok(())
+}
+
+async fn execute_discover_only_mode(
+    config: &Config,
+    job_queue: &JobQueue,
+    targets: &[IpAddr],
+) -> Result<()> {
+    info!("Executing DISCOVER-ONLY mode with multi-method discovery");
+    info!("Methods: TCP Connect, ICMP Echo, ARP (local), TCP SYN");
+    info!("Note: ICMP, ARP, and TCP SYN require sudo for best results");
+
+    let discovery_ports = config.parse_discovery_ports();
+
+    // Submit multiple discovery jobs in parallel
+    // 1. TCP Connect via rustscan (works without sudo)
+    job_queue.submit(Job::Discovery(DiscoveryJob {
+        method: DiscoveryMethodType::RustscanCustom {
+            ports: discovery_ports.clone(),
+        },
+        targets: targets.to_vec(),
+        options: DiscoveryOptions {
+            timeout_ms: config.timeout,
+            max_retries: 1,
+        },
+    }))?;
+
+    // 2. ICMP Echo (ping sweep) - requires sudo
+    job_queue.submit(Job::Discovery(DiscoveryJob {
+        method: DiscoveryMethodType::IcmpEcho,
+        targets: targets.to_vec(),
+        options: DiscoveryOptions {
+            timeout_ms: config.timeout,
+            max_retries: 1,
+        },
+    }))?;
+
+    // 3. ARP discovery (local networks) - requires sudo
+    job_queue.submit(Job::Discovery(DiscoveryJob {
+        method: DiscoveryMethodType::Arp,
+        targets: targets.to_vec(),
+        options: DiscoveryOptions {
+            timeout_ms: config.timeout,
+            max_retries: 1,
+        },
+    }))?;
+
+    // 4. TCP SYN on discovery ports - requires sudo
+    job_queue.submit(Job::Discovery(DiscoveryJob {
+        method: DiscoveryMethodType::TcpSyn {
+            ports: discovery_ports,
+        },
+        targets: targets.to_vec(),
+        options: DiscoveryOptions {
+            timeout_ms: config.timeout,
+            max_retries: 1,
+        },
+    }))?;
+
+    info!("Submitted 4 discovery methods to run in parallel");
     Ok(())
 }
 
@@ -320,8 +442,8 @@ async fn execute_full_mode(
     // Stage 1: Discovery
     execute_discover_mode(config, job_queue, targets).await?;
 
-    // Wait a bit for initial discovery
-    tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+    // Wait for discovery to mostly complete
+    tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
 
     // Stage 2: Comprehensive port scan (runs in background)
     info!("Starting comprehensive -Pn -p- scan in background");

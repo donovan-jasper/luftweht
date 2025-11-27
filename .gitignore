@@ -40,3 +40,5 @@ cidr-*.log
 # Backup files
 *.bak
 *.backup
+
+ac-lab.ovpn

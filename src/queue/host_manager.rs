@@ -75,8 +75,9 @@ impl HostManager {
             method,
         });
 
-        // Schedule port scan job
-        self.schedule_port_scan(host.clone());
+        // NOTE: Port scanning now scheduled explicitly after discovery phase completes
+        // Previously auto-scheduled here, which caused discovery to hang waiting for sudo
+        // self.schedule_port_scan(host.clone());
 
         host
     }
@@ -88,14 +89,24 @@ impl HostManager {
 
         debug!("Port discovered: {}:{}", ip, port);
 
+        // Add port to the host
+        host.add_port(port, crate::models::service::PortInfo {
+            port,
+            protocol: crate::models::service::Protocol::Tcp,
+            state: crate::models::service::PortState::Open,
+            discovered_by: "rustscan".to_string(),
+            banner: None,
+        });
+
         // Emit event
         let _ = self.event_tx.send(DiscoveryEvent::PortDiscovered {
             host: host.clone(),
             port,
         });
 
-        // Schedule info gathering for this port
-        self.schedule_info_gather(host.clone(), vec![port]);
+        // NOTE: Info gathering now scheduled explicitly after discovery phase completes
+        // Previously auto-scheduled here, causing discovery to hang (requires sudo for nmap -O)
+        // self.schedule_info_gather(host.clone(), vec![port]);
 
         Some(host.clone())
     }

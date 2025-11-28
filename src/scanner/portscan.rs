@@ -83,6 +83,10 @@ impl PortScanEngine {
                 };
                 job.host.add_discovery_method(method);
 
+                // Schedule service enumeration now that port scan is complete
+                // This batches all discovered ports into a single nmap -sV -O job
+                self.host_manager.schedule_service_enumeration(ip);
+
                 self.backoff.record_success().await;
                 Ok(())
             }

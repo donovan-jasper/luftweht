@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
@@ -31,6 +31,8 @@ pub struct HostManager {
     job_queue: JobQueue,
     event_tx: mpsc::UnboundedSender<DiscoveryEvent>,
     vuln_scan_enabled: bool,
+    /// Track which hosts have had service enumeration scheduled to prevent duplicates
+    service_enum_scheduled: Arc<RwLock<HashSet<IpAddr>>>,
 }
 
 impl HostManager {
@@ -42,6 +44,7 @@ impl HostManager {
             job_queue,
             event_tx,
             vuln_scan_enabled,
+            service_enum_scheduled: Arc::new(RwLock::new(HashSet::new())),
         };
 
         (manager, event_rx)
@@ -75,9 +78,9 @@ impl HostManager {
             method,
         });
 
-        // NOTE: Port scanning now scheduled explicitly after discovery phase completes
-        // Previously auto-scheduled here, which caused discovery to hang waiting for sudo
-        // self.schedule_port_scan(host.clone());
+        // Auto-schedule full port scan for newly discovered host
+        // Safe now that sudo check happens at startup
+        self.schedule_port_scan(host.clone());
 
         host
     }
@@ -130,7 +133,7 @@ impl HostManager {
     fn schedule_port_scan(&self, host: Host) {
         let job = Job::PortScan(PortScanJob {
             host,
-            scan_type: PortScanType::Fast,
+            scan_type: PortScanType::Full,
             options: Default::default(),
         });
 
@@ -166,6 +169,33 @@ impl HostManager {
             if let Err(e) = self.job_queue.submit(vuln_job) {
                 tracing::error!("Failed to schedule vuln scan: {}", e);
             }
+        }
+    }
+
+    /// Schedule service enumeration for a host after port scanning completes
+    /// Batches all discovered ports into a single nmap -sV -O job
+    pub fn schedule_service_enumeration(&self, ip: IpAddr) {
+        // Check if already scheduled to prevent duplicates
+        {
+            let mut scheduled = self.service_enum_scheduled.write().unwrap();
+            if scheduled.contains(&ip) {
+                debug!("Service enumeration already scheduled for {}", ip);
+                return;
+            }
+            scheduled.insert(ip);
+        }
+
+        let hosts = self.hosts.read().unwrap();
+        if let Some(host) = hosts.get(&ip) {
+            let ports = host.get_open_ports();
+
+            if ports.is_empty() {
+                debug!("No ports found for {}, skipping service enumeration", ip);
+                return;
+            }
+
+            info!("Scheduling service enumeration for {} ({} ports)", ip, ports.len());
+            self.schedule_info_gather(host.clone(), ports);
         }
     }
 

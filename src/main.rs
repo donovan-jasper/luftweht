@@ -34,6 +34,24 @@ async fn main() -> Result<()> {
     // Setup logging
     setup_logging(config.verbose);
 
+    // Check for sudo privileges
+    #[cfg(unix)]
+    {
+        use nix::unistd::geteuid;
+        if !geteuid().is_root() {
+            error!("This scanner requires sudo privileges for:");
+            error!("  - ICMP echo (ping sweep)");
+            error!("  - ARP discovery (local networks)");
+            error!("  - TCP SYN discovery (stealth scanning)");
+            error!("  - Service enumeration (nmap -sV)");
+            error!("  - OS fingerprinting (nmap -O)");
+            error!("");
+            error!("Please run with: sudo ./luftweht [OPTIONS] <TARGETS>");
+            std::process::exit(1);
+        }
+        info!("Running with sudo privileges ✓");
+    }
+
     info!("Luftweht Network Scanner starting");
     info!("Mode: {:?}", config.mode);
 

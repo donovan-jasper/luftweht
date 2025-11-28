@@ -27,10 +27,8 @@ impl ScanExecutor {
 
         // Add ports if specified
         if let Some(port_list) = ports {
-            if port_list.is_empty() {
-                // Full port scan
-                cmd.arg("-p").arg("1-65535");
-            } else {
+            if !port_list.is_empty() {
+                // Specific ports
                 let ports_str = port_list
                     .iter()
                     .map(|p| p.to_string())
@@ -38,6 +36,8 @@ impl ScanExecutor {
                     .join(",");
                 cmd.arg("-p").arg(ports_str);
             }
+            // If port_list is empty, omit -p flag entirely for full scan
+            // Rustscan scans all 65535 ports by default when -p is not specified
         }
 
         // Timeout (rustscan expects milliseconds)

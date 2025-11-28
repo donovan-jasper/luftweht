@@ -33,6 +33,9 @@ impl PortScanEngine {
         let ip = job.host.ip();
         let _guard = self.rate_limiter.acquire(ip).await;
 
+        // Emit port scan started event
+        self.host_manager.emit_port_scan_started(ip);
+
         info!(
             "Port scanning {} ({:?})",
             ip,
@@ -55,9 +58,11 @@ impl PortScanEngine {
         .await
         {
             Ok(result) => {
+                let total_ports = result.open_ports.len();
+
                 info!(
                     "Found {} open ports on {}",
-                    result.open_ports.len(),
+                    total_ports,
                     ip
                 );
 
@@ -86,6 +91,9 @@ impl PortScanEngine {
                 // Schedule service enumeration now that port scan is complete
                 // This batches all discovered ports into a single nmap -sV -O job
                 self.host_manager.schedule_service_enumeration(ip);
+
+                // Emit port scan complete event
+                self.host_manager.emit_port_scan_complete(ip, total_ports);
 
                 self.backoff.record_success().await;
                 Ok(())

@@ -4,13 +4,15 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
-use crate::models::host::{DiscoveryMethod, Host};
+use crate::models::host::{DiscoveryMethod, Host, OsFingerprint};
 use crate::models::job::{InfoGatherJob, InfoGatherType, Job, PortScanJob, PortScanType, VulnScanJob};
+use crate::models::service::ServiceInfo;
 use crate::queue::JobQueue;
 
 /// Event emitted when hosts or ports are discovered
 #[derive(Debug, Clone)]
 pub enum DiscoveryEvent {
+    // Existing events
     HostDiscovered {
         host: Host,
         method: DiscoveryMethod,
@@ -21,6 +23,40 @@ pub enum DiscoveryEvent {
     },
     HostUpdated {
         host: Host,
+    },
+
+    // NEW: Port scanning progress events
+    PortScanStarted {
+        ip: IpAddr,
+    },
+    PortScanProgress {
+        ip: IpAddr,
+        progress: f32,
+        ports_found: usize,
+    },
+    PortScanComplete {
+        ip: IpAddr,
+        total_ports: usize,
+    },
+
+    // NEW: Service enumeration progress events
+    ServiceEnumStarted {
+        ip: IpAddr,
+        port_count: usize,
+    },
+    ServiceEnumProgress {
+        ip: IpAddr,
+        services_found: usize,
+    },
+    ServiceEnumComplete {
+        ip: IpAddr,
+        services: Vec<ServiceInfo>,
+    },
+
+    // NEW: OS detection completion
+    OsDetectionComplete {
+        ip: IpAddr,
+        os_info: OsFingerprint,
     },
 }
 
@@ -218,5 +254,32 @@ impl HostManager {
                 tracing::error!("Failed to schedule comprehensive scan: {}", e);
             }
         }
+    }
+
+    // ===== Event Emission Helpers =====
+
+    /// Emit port scan started event
+    pub fn emit_port_scan_started(&self, ip: IpAddr) {
+        let _ = self.event_tx.send(DiscoveryEvent::PortScanStarted { ip });
+    }
+
+    /// Emit port scan complete event
+    pub fn emit_port_scan_complete(&self, ip: IpAddr, total_ports: usize) {
+        let _ = self.event_tx.send(DiscoveryEvent::PortScanComplete { ip, total_ports });
+    }
+
+    /// Emit service enumeration started event
+    pub fn emit_service_enum_started(&self, ip: IpAddr, port_count: usize) {
+        let _ = self.event_tx.send(DiscoveryEvent::ServiceEnumStarted { ip, port_count });
+    }
+
+    /// Emit service enumeration complete event
+    pub fn emit_service_enum_complete(&self, ip: IpAddr, services: Vec<crate::models::service::ServiceInfo>) {
+        let _ = self.event_tx.send(DiscoveryEvent::ServiceEnumComplete { ip, services });
+    }
+
+    /// Emit OS detection complete event
+    pub fn emit_os_detection_complete(&self, ip: IpAddr, os_info: crate::models::host::OsFingerprint) {
+        let _ = self.event_tx.send(DiscoveryEvent::OsDetectionComplete { ip, os_info });
     }
 }

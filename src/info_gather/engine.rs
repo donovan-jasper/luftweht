@@ -4,18 +4,21 @@ use anyhow::Result;
 use crate::models::host::OsFingerprint;
 use crate::models::job::{InfoGatherJob, InfoGatherType};
 use crate::models::service::ServiceInfo;
+use crate::queue::HostManager;
 use crate::rate_limit::{AdaptiveBackoff, RateLimiter};
 use crate::scanner::ScanExecutor;
 
 /// Information gathering engine
 pub struct InfoGatherEngine {
+    host_manager: HostManager,
     rate_limiter: RateLimiter,
     backoff: AdaptiveBackoff,
 }
 
 impl InfoGatherEngine {
-    pub fn new(rate_limiter: RateLimiter, backoff: AdaptiveBackoff) -> Self {
+    pub fn new(host_manager: HostManager, rate_limiter: RateLimiter, backoff: AdaptiveBackoff) -> Self {
         Self {
+            host_manager,
             rate_limiter,
             backoff,
         }
@@ -68,23 +71,33 @@ impl InfoGatherEngine {
     async fn service_enumeration(&self, job: &InfoGatherJob) -> Result<()> {
         let ip = job.host.ip();
 
+        // Emit service enumeration started event
+        self.host_manager.emit_service_enum_started(ip, job.ports.len());
+
         info!("Running service enumeration on {}", ip);
 
         let result = ScanExecutor::rustscan_service_detect(ip, &job.ports, 5000).await?;
+
+        // Collect services for event emission
+        let mut services_vec = Vec::new();
 
         // Register services
         for svc in result.services {
             let service_info = ServiceInfo {
                 port: svc.port,
                 service_name: Some(svc.name),
-                version: svc.version,
+                version: svc.version.clone(),
                 cpe: None,
-                product: svc.product,
+                product: svc.product.clone(),
                 extra_info: None,
             };
 
+            services_vec.push(service_info.clone());
             job.host.add_service(service_info);
         }
+
+        // Emit service enumeration complete event
+        self.host_manager.emit_service_enum_complete(ip, services_vec);
 
         // Register OS info if found
         if let Some(os_match) = result.os_match {
@@ -95,7 +108,10 @@ impl InfoGatherEngine {
                 method: "rustscan-nmap".to_string(),
             };
 
-            job.host.set_os_fingerprint(os_fp);
+            job.host.set_os_fingerprint(os_fp.clone());
+
+            // Emit OS detection complete event
+            self.host_manager.emit_os_detection_complete(ip, os_fp);
         }
 
         Ok(())

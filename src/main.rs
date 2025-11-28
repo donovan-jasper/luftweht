@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
     ));
 
     let infogather_engine = Arc::new(InfoGatherEngine::new(
+        host_manager.clone(),
         rate_limiter.clone(),
         backoff.clone(),
     ));

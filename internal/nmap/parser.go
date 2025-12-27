@@ -2,6 +2,7 @@ package nmap
 
 import (
 	"encoding/xml"
+	"fmt"
 	"time"
 
 	"github.com/donovan-jasper/luftweht/internal/models"
@@ -166,11 +167,24 @@ func ParseXML(data []byte) (*NmapRun, error) {
 }
 
 // ToModelHosts converts nmap hosts to model hosts
+// Includes proxy ARP detection - if >50% of hosts share the same MAC, they're filtered out
 func (n *NmapRun) ToModelHosts(subnet string) []models.Host {
-	var hosts []models.Host
+	// First pass: collect all candidate hosts with their MACs
+	type candidateHost struct {
+		host models.Host
+		mac  string
+	}
+	var candidates []candidateHost
+	macCounts := make(map[string]int)
 
 	for _, h := range n.Hosts {
+		// Must be marked as "up"
 		if h.Status.State != "up" {
+			continue
+		}
+
+		reason := h.Status.Reason
+		if reason == "" || reason == "no-response" || reason == "user-set" || reason == "localhost-response" {
 			continue
 		}
 
@@ -180,11 +194,14 @@ func (n *NmapRun) ToModelHosts(subnet string) []models.Host {
 			DiscoveredAt: time.Now(),
 		}
 
-		// Get IP address
+		// Get IP and MAC addresses
+		var mac string
 		for _, addr := range h.Addresses {
-			if addr.AddrType == "ipv4" || addr.AddrType == "ipv6" {
+			switch addr.AddrType {
+			case "ipv4", "ipv6":
 				host.IP = addr.Addr
-				break
+			case "mac":
+				mac = addr.Addr
 			}
 		}
 
@@ -196,8 +213,46 @@ func (n *NmapRun) ToModelHosts(subnet string) []models.Host {
 			}
 		}
 
-		if host.IP != "" {
-			hosts = append(hosts, host)
+		if host.IP == "" {
+			continue
+		}
+
+		// Only check for proxy ARP on arp-response discoveries
+		// Other methods (ICMP, TCP) legitimately route through the gateway
+		if reason == "arp-response" && mac != "" {
+			candidates = append(candidates, candidateHost{host: host, mac: mac})
+			macCounts[mac]++
+		} else {
+			// Non-ARP discovery or strong reason - don't filter by MAC
+			candidates = append(candidates, candidateHost{host: host, mac: ""})
+		}
+	}
+
+	// Detect proxy ARP: if any MAC appears on >50% of hosts, it's the firewall
+	var proxyARPMac string
+	threshold := len(candidates) / 2
+	for mac, count := range macCounts {
+		if count > threshold && count > 3 { // Also require at least 4 hosts to trigger
+			proxyARPMac = mac
+			break
+		}
+	}
+
+	// Second pass: filter out proxy ARP hosts
+	var hosts []models.Host
+	for _, c := range candidates {
+		// Keep if: no MAC (strong reason), different MAC than proxy, or no proxy detected
+		if c.mac == "" || proxyARPMac == "" || c.mac != proxyARPMac {
+			hosts = append(hosts, c.host)
+		}
+	}
+
+	// Log if we filtered proxy ARP
+	if proxyARPMac != "" {
+		filtered := len(candidates) - len(hosts)
+		if filtered > 0 {
+			fmt.Printf("[Discovery] Proxy ARP detected (MAC %s) - filtered %d false hosts, kept %d\n",
+				proxyARPMac, filtered, len(hosts))
 		}
 	}
 

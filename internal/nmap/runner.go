@@ -24,52 +24,37 @@ func NewRunner(timing string, verbose bool) *Runner {
 	}
 }
 
-// DiscoverHosts runs host discovery on a subnet
-func (r *Runner) DiscoverHosts(ctx context.Context, subnet string) (*NmapRun, error) {
-	// Aggressive multi-method discovery
-	args := []string{
-		"-sn",         // No port scan
-		"-" + r.Timing, // Timing template
-		"-PR",         // ARP ping (local subnet)
-		"-PE",         // ICMP Echo
-		"-PP",         // ICMP Timestamp
-		"-PM",         // ICMP Address Mask
-		"-PS21,22,23,25,80,111,135,139,443,445,3389,8080,8443", // TCP SYN
-		"-PA80,443",       // TCP ACK
-		"-PU53,123,137,161,500", // UDP probes
-		"-oX", "-",        // XML output to stdout
-		subnet,
-	}
-
-	return r.run(ctx, args, 5*time.Minute)
-}
-
-// ScanTCPPorts runs a TCP port scan on a host
-func (r *Runner) ScanTCPPorts(ctx context.Context, host string, portStart, portEnd int) (*NmapRun, error) {
-	portRange := fmt.Sprintf("%d-%d", portStart, portEnd)
-
-	args := []string{
-		"-sS",           // TCP SYN scan
-		"-" + r.Timing,  // Timing template
-		"-Pn",           // Skip host discovery (already discovered)
-		"-p", portRange, // Port range
-		"--open",        // Only show open ports
-		"-oX", "-",      // XML output to stdout
-		host,
-	}
-
-	// Timeout scales with port range
-	portCount := portEnd - portStart + 1
-	timeout := time.Duration(portCount/1000+5) * time.Minute
-	if timeout > 30*time.Minute {
-		timeout = 30 * time.Minute
-	}
-
+// RunRaw executes nmap with raw arguments
+func (r *Runner) RunRaw(ctx context.Context, args []string, timeout time.Duration) (*NmapRun, error) {
+	// Add XML output
+	args = append(args, "-oX", "-")
 	return r.run(ctx, args, timeout)
 }
 
-// ScanServiceVersion runs service version detection on specific ports
-func (r *Runner) ScanServiceVersion(ctx context.Context, host string, ports []int) (*NmapRun, error) {
+// ScanTCPFast runs a fast TCP scan (top 100 ports, no version detection)
+// If skipPing is true, adds -Pn to skip nmap's host discovery (needed for Windows hosts or skip-discovery mode)
+func (r *Runner) ScanTCPFast(ctx context.Context, host string, skipPing bool) (*NmapRun, error) {
+	args := []string{}
+
+	if skipPing {
+		// Skip nmap's host discovery - scan even if host doesn't respond to probes
+		// Required for: Windows hosts with firewall, skip-discovery mode
+		args = append(args, "-Pn")
+	}
+
+	args = append(args,
+		"-F",           // Fast mode (top 100 ports)
+		"-R",           // Always resolve hostnames
+		"-"+r.Timing,   // Timing template
+		"-oX", "-",     // XML output
+		host,
+	)
+
+	return r.run(ctx, args, 3*time.Minute)
+}
+
+// ScanDeep runs an aggressive scan on specific ports (-A -sVC)
+func (r *Runner) ScanDeep(ctx context.Context, host string, ports []int) (*NmapRun, error) {
 	if len(ports) == 0 {
 		return &NmapRun{}, nil
 	}
@@ -82,46 +67,36 @@ func (r *Runner) ScanServiceVersion(ctx context.Context, host string, ports []in
 	portList := strings.Join(portStrs, ",")
 
 	args := []string{
+		"-Pn",          // Skip discovery
+		"-p", portList, // Specific ports
+		"-A",           // Aggressive (OS detection, version, scripts, traceroute)
 		"-sV",          // Version detection
 		"-sC",          // Default scripts
-		"-T3",          // Use T3 for service detection (faster than T2)
-		"-Pn",          // Skip host discovery
-		"-p", portList, // Specific ports
-		"-oX", "-",     // XML output to stdout
+		"-oX", "-",     // XML output
 		host,
 	}
 
 	// Timeout based on number of ports
-	timeout := time.Duration(len(ports)*30+60) * time.Second
-	if timeout > 15*time.Minute {
-		timeout = 15 * time.Minute
+	timeout := time.Duration(len(ports)*60+120) * time.Second
+	if timeout > 30*time.Minute {
+		timeout = 30 * time.Minute
 	}
 
 	return r.run(ctx, args, timeout)
 }
 
-// ScanUDPPorts runs a UDP port scan on a host
-func (r *Runner) ScanUDPPorts(ctx context.Context, host string, portStart, portEnd int) (*NmapRun, error) {
-	portRange := fmt.Sprintf("%d-%d", portStart, portEnd)
-
+// ScanUDPFast runs a fast UDP scan (top 100 ports)
+func (r *Runner) ScanUDPFast(ctx context.Context, host string) (*NmapRun, error) {
 	args := []string{
-		"-sU",           // UDP scan
-		"-" + r.Timing,  // Timing template
-		"-Pn",           // Skip host discovery
-		"-p", portRange, // Port range
-		"--open",        // Only show open ports
-		"-oX", "-",      // XML output to stdout
+		"-Pn",          // Skip discovery
+		"-sU",          // UDP scan
+		"-F",           // Fast mode (top 100 ports)
+		"-" + r.Timing, // Timing template
+		"-oX", "-",     // XML output
 		host,
 	}
 
-	// UDP scans are much slower - give them more time
-	portCount := portEnd - portStart + 1
-	timeout := time.Duration(portCount/100+10) * time.Minute
-	if timeout > 60*time.Minute {
-		timeout = 60 * time.Minute
-	}
-
-	return r.run(ctx, args, timeout)
+	return r.run(ctx, args, 15*time.Minute)
 }
 
 // run executes nmap with the given arguments
@@ -183,13 +158,4 @@ func CheckNmapInstalled() error {
 	}
 
 	return nil
-}
-
-// CheckRootPrivileges checks if we have root/sudo for raw sockets
-func CheckRootPrivileges() bool {
-	// Try to create a raw socket test
-	cmd := exec.Command("nmap", "-sS", "-p", "1", "--max-retries", "0", "127.0.0.1")
-	cmd.Run()
-	// If SYN scan works on localhost, we have privileges
-	return true // For now, assume it works - nmap will error if not
 }

@@ -57,6 +57,7 @@ Examples:
 	rootCmd.Flags().IntVar(&cfg.TCPChunks, "tcp-chunks", cfg.TCPChunks, "Number of port chunks for TCP scan")
 	rootCmd.Flags().BoolVar(&cfg.SkipUDP, "skip-udp", cfg.SkipUDP, "Skip UDP scanning")
 	rootCmd.Flags().BoolVar(&cfg.SkipService, "skip-service", cfg.SkipService, "Skip service version detection")
+	rootCmd.Flags().BoolVar(&cfg.SkipDiscovery, "skip-discovery", cfg.SkipDiscovery, "Skip host discovery, scan all IPs directly (for firewall-heavy networks)")
 
 	// Resume flags
 	rootCmd.Flags().BoolVar(&cfg.ForceRestart, "restart", false, "Force restart, ignoring any existing scan progress")
@@ -193,5 +194,8 @@ func printBanner() {
 	fmt.Printf("Timing:       %s\n", cfg.Timing)
 	fmt.Printf("Max Workers:  %d (auto-detected: %d)\n", cfg.GetMaxWorkers(), config.DetectMaxWorkers())
 	fmt.Printf("Targets:      %d subnet(s)\n", len(cfg.Subnets))
+	if cfg.SkipDiscovery {
+		fmt.Printf("Mode:         Direct scan (skip discovery)\n")
+	}
 	fmt.Println()
 }

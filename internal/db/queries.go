@@ -305,16 +305,16 @@ func (db *DB) GetNextPendingScan() (*models.ScanProgress, error) {
 		SELECT id, host_id, subnet, scan_type, port_start, port_end,
 			   status, started_at, completed_at, error
 		FROM scan_progress
-		WHERE status IN ('pending', 'running')
+		WHERE status = 'pending'
 		ORDER BY
-			CASE WHEN status = 'running' THEN 0 ELSE 1 END,
 			CASE scan_type
 				WHEN 'discovery' THEN 0
 				WHEN 'tcp' THEN 1
 				WHEN 'svc' THEN 2
 				WHEN 'udp' THEN 3
 			END,
-			id
+			port_start,
+			host_id
 		LIMIT 1
 	`).Scan(
 		&sp.ID, &hostID, &subnet, &sp.ScanType, &sp.PortStart, &sp.PortEnd,

@@ -26,9 +26,10 @@ type Config struct {
 	TargetUtilization float64
 
 	// Scan options
-	TCPChunks   int
-	SkipUDP     bool
-	SkipService bool
+	TCPChunks     int
+	SkipUDP       bool
+	SkipService   bool
+	SkipDiscovery bool // Skip ping sweep, go straight to port scanning (for firewall-heavy networks)
 
 	// Resume
 	Resume       bool

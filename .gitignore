@@ -1,22 +1,24 @@
-# Rust build artifacts
-/target
-# Cargo.lock - keep this for reproducible binary builds
+# Go build artifacts
+/luftweht
+/scanner
+*.exe
 
 # Scan output directories
 output/
 scan-results/
 results/
 
+# Database files
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
 # Log files
 *.log
 
 # Scan data files
 *.ndjson
-*.json
-*.md
-!README.md
-!SAFE-SCANNING.md
-!LICENSE.md
 
 # State files for resume
 *.state
@@ -41,4 +43,5 @@ cidr-*.log
 *.bak
 *.backup
 
-ac-lab.ovpn
+# Sensitive files
+*.ovpn

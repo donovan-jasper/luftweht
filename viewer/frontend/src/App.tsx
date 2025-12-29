@@ -70,9 +70,23 @@ const StatusBadge = ({ status, onClick, active }: { status: string, onClick?: ()
 const HostCard = ({ host, expanded, onToggle, highlightPort }: { host: Host, expanded: boolean, onToggle: () => void, highlightPort?: number }) => {
   const [ports, setPorts] = useState<Port[]>([])
   const [loading, setLoading] = useState(false)
+  const [lastStatus, setLastStatus] = useState(host.status)
 
+  // Re-fetch ports when expanded OR when status changes (to get updated service info)
   useEffect(() => {
-    if (expanded && ports.length === 0 && !hostPortsCache[host.id]) {
+    const statusChanged = lastStatus !== host.status
+    const shouldFetch = expanded && (
+      !hostPortsCache[host.id] ||  // No cache
+      statusChanged                 // Status changed (e.g., tcp_done -> svc_done)
+    )
+
+    if (statusChanged) {
+      setLastStatus(host.status)
+      // Invalidate cache on status change
+      delete hostPortsCache[host.id]
+    }
+
+    if (shouldFetch) {
       setLoading(true)
       fetch(`/api/ports?host_id=${host.id}`)
         .then(r => r.json())
@@ -83,10 +97,10 @@ const HostCard = ({ host, expanded, onToggle, highlightPort }: { host: Host, exp
           setLoading(false)
         })
         .catch(() => setLoading(false))
-    } else if (hostPortsCache[host.id]) {
+    } else if (hostPortsCache[host.id] && !statusChanged) {
       setPorts(hostPortsCache[host.id])
     }
-  }, [expanded, host.id, ports.length])
+  }, [expanded, host.id, host.status, lastStatus])
 
   return (
     <div className="bg-slate-800/60 rounded-xl border border-slate-700/50 overflow-hidden shadow-lg">

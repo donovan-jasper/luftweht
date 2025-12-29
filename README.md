@@ -81,6 +81,7 @@ sudo luftweht \
 | `--tcp-chunks` | 7 | Number of port chunks for TCP scan |
 | `--skip-udp` | false | Skip UDP scanning |
 | `--skip-service` | false | Skip service version detection |
+| `--skip-discovery` | false | Skip host discovery, scan all IPs directly (for firewall-heavy networks) |
 | `--restart` | false | Force restart, ignoring existing progress |
 | `-v, --verbose` | false | Verbose output |
 
@@ -108,7 +109,50 @@ sudo luftweht 10.0.0.0/24
 sudo luftweht --restart 10.0.0.0/24
 ```
 
-## Querying Results
+## Web Viewer
+
+Luftweht includes a real-time web viewer for monitoring scan progress and exploring results.
+
+### Running the Viewer
+
+```bash
+# Build the frontend (first time only)
+cd viewer/frontend && npm install && npm run build && cd ../..
+
+# Start the viewer
+go run ./viewer/server.go --db scan_results.db --port 8080
+
+# Or build and run
+go build -o viewer-server ./viewer/server.go
+./viewer-server --db scan_results.db --port 8080
+```
+
+Open http://localhost:8080 to view results.
+
+### Viewer Features
+
+- **Real-time Updates**: Auto-refreshes via Server-Sent Events (SSE) every 2 seconds
+- **Scan Progress**: Live progress bar showing completion percentage
+- **Host Status**: Visual indicators for each scan phase (discovered → tcp_scanning → tcp_done → svc_scanning → svc_done → complete)
+- **Port Details**: Expand any host to see open ports, services, and versions
+- **Filtering**: Search by IP/hostname, filter by status, or find hosts with specific open ports
+- **Subnet Grouping**: Hosts organized by subnet with collapsible sections
+
+### Running Scanner + Viewer Together
+
+```bash
+# Terminal 1: Start the scanner
+sudo ./luftweht --file targets.txt --skip-udp -v
+
+# Terminal 2: Start the viewer
+go run ./viewer/server.go --db scan_results.db
+
+# Open browser to http://localhost:8080
+```
+
+The viewer connects to the database in read-only mode, so it won't interfere with the scanner.
+
+## Querying Results (CLI)
 
 Results are stored in SQLite. Query with:
 

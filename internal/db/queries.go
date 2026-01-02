@@ -444,3 +444,99 @@ func (db *DB) GetScanStats() (map[string]int, error) {
 
 	return stats, nil
 }
+
+// CreateChunkJobs creates scan progress records for all chunks
+func (db *DB) CreateChunkJobs(hostID int64, scanType models.ScanType, chunks []models.PortChunk) ([]int64, error) {
+	var ids []int64
+	tx, err := db.Begin()
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO scan_progress (host_id, scan_type, port_start, port_end, status)
+		VALUES (?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer stmt.Close()
+
+	for _, chunk := range chunks {
+		result, err := stmt.Exec(hostID, scanType, chunk.Start, chunk.End, models.ProgressStatusPending)
+		if err != nil {
+			return nil, err
+		}
+		id, _ := result.LastInsertId()
+		ids = append(ids, id)
+	}
+
+	return ids, tx.Commit()
+}
+
+// GetHostChunkProgress retrieves chunk progress for a host and scan type
+func (db *DB) GetHostChunkProgress(hostID int64, scanType models.ScanType) (*models.HostChunkProgress, error) {
+	rows, err := db.Query(`
+		SELECT port_start, port_end, status, id
+		FROM scan_progress
+		WHERE host_id = ? AND scan_type = ?
+		ORDER BY port_start
+	`, hostID, scanType)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	progress := &models.HostChunkProgress{
+		HostID:          hostID,
+		ScanType:        scanType,
+		CompletedChunks: make(map[int]bool),
+	}
+
+	chunkIndex := 0
+	for rows.Next() {
+		var start, end int
+		var status models.ProgressStatus
+		var id int64
+
+		if err := rows.Scan(&start, &end, &status, &id); err != nil {
+			return nil, err
+		}
+
+		if status == models.ProgressStatusComplete {
+			progress.CompletedChunks[chunkIndex] = true
+		}
+		chunkIndex++
+	}
+
+	progress.TotalChunks = chunkIndex
+	return progress, rows.Err()
+}
+
+// GetNewPortsForServiceDetection retrieves ports discovered after a given time without service info
+func (db *DB) GetNewPortsForServiceDetection(hostID int64, afterTime time.Time) ([]models.Port, error) {
+	rows, err := db.Query(`
+		SELECT id, host_id, port, protocol, state, service, version, discovered_at
+		FROM ports
+		WHERE host_id = ? AND state = 'open' AND discovered_at >= ?
+			  AND (service IS NULL OR service = '')
+		ORDER BY protocol, port
+	`, hostID, afterTime)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var ports []models.Port
+	for rows.Next() {
+		var p models.Port
+		if err := rows.Scan(&p.ID, &p.HostID, &p.Port, &p.Protocol,
+			&p.State, &p.Service, &p.Version, &p.DiscoveredAt); err != nil {
+			return nil, err
+		}
+		ports = append(ports, p)
+	}
+
+	return ports, rows.Err()
+}

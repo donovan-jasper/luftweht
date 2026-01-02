@@ -99,6 +99,52 @@ func (r *Runner) ScanUDPFast(ctx context.Context, host string) (*NmapRun, error)
 	return r.run(ctx, args, 15*time.Minute)
 }
 
+// ScanTCPChunk scans a specific range of TCP ports
+func (r *Runner) ScanTCPChunk(ctx context.Context, host string, portStart, portEnd int) (*NmapRun, error) {
+	portRange := fmt.Sprintf("%d-%d", portStart, portEnd)
+
+	args := []string{
+		"-Pn",          // Skip discovery
+		"-sS",          // SYN scan
+		"-p", portRange,
+		"-" + r.Timing,
+		"-oX", "-",
+		host,
+	}
+
+	// Dynamic timeout based on range size
+	rangeSize := portEnd - portStart + 1
+	timeout := time.Duration(rangeSize/100+60) * time.Second
+	if timeout > 10*time.Minute {
+		timeout = 10 * time.Minute
+	}
+
+	return r.run(ctx, args, timeout)
+}
+
+// ScanUDPChunk scans a specific range of UDP ports
+func (r *Runner) ScanUDPChunk(ctx context.Context, host string, portStart, portEnd int) (*NmapRun, error) {
+	portRange := fmt.Sprintf("%d-%d", portStart, portEnd)
+
+	args := []string{
+		"-Pn",
+		"-sU", // UDP scan
+		"-p", portRange,
+		"-" + r.Timing,
+		"-oX", "-",
+		host,
+	}
+
+	// UDP is slower - longer timeout
+	rangeSize := portEnd - portStart + 1
+	timeout := time.Duration(rangeSize/50+120) * time.Second
+	if timeout > 20*time.Minute {
+		timeout = 20 * time.Minute
+	}
+
+	return r.run(ctx, args, timeout)
+}
+
 // run executes nmap with the given arguments
 func (r *Runner) run(ctx context.Context, args []string, timeout time.Duration) (*NmapRun, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)

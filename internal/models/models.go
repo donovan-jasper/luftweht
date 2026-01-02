@@ -17,13 +17,18 @@ type Host struct {
 type HostStatus string
 
 const (
-	HostStatusDiscovered  HostStatus = "discovered"
-	HostStatusTCPScanning HostStatus = "tcp_scanning"
-	HostStatusTCPDone     HostStatus = "tcp_done"
-	HostStatusSVCScanning HostStatus = "svc_scanning"
-	HostStatusSVCDone     HostStatus = "svc_done"
-	HostStatusUDPScanning HostStatus = "udp_scanning"
-	HostStatusComplete    HostStatus = "complete"
+	HostStatusDiscovered      HostStatus = "discovered"
+	HostStatusTCPScanning     HostStatus = "tcp_scanning"
+	HostStatusTCPDone         HostStatus = "tcp_done"
+	HostStatusSVCScanning     HostStatus = "svc_scanning"
+	HostStatusSVCDone         HostStatus = "svc_done"
+	HostStatusFullTCPScanning HostStatus = "full_tcp_scanning"
+	HostStatusFullTCPDone     HostStatus = "full_tcp_done"
+	HostStatusFullUDPScanning HostStatus = "full_udp_scanning"
+	HostStatusFullUDPDone     HostStatus = "full_udp_done"
+	HostStatusSVC2Scanning    HostStatus = "svc2_scanning"
+	HostStatusUDPScanning     HostStatus = "udp_scanning"
+	HostStatusComplete        HostStatus = "complete"
 )
 
 // Port represents a discovered port on a host
@@ -59,6 +64,9 @@ const (
 	ScanTypeDiscovery ScanType = "discovery"
 	ScanTypeTCP       ScanType = "tcp"
 	ScanTypeSVC       ScanType = "svc"
+	ScanTypeFullTCP   ScanType = "full_tcp"
+	ScanTypeFullUDP   ScanType = "full_udp"
+	ScanTypeSVC2      ScanType = "svc2"
 	ScanTypeUDP       ScanType = "udp"
 )
 
@@ -124,4 +132,28 @@ func DefaultUDPChunks() []PortChunk {
 		{50001, 60000},
 		{60001, 65535},
 	}
+}
+
+// ChunkJob represents a chunk scanning job
+type ChunkJob struct {
+	HostID     int64
+	Host       *Host
+	ChunkIndex int
+	PortStart  int
+	PortEnd    int
+	Protocol   string // "tcp" or "udp"
+	ProgressID int64  // scan_progress record ID
+}
+
+// HostChunkProgress tracks chunk completion for a host
+type HostChunkProgress struct {
+	HostID          int64
+	ScanType        ScanType
+	CompletedChunks map[int]bool
+	TotalChunks     int
+}
+
+// IsComplete returns true if all chunks are complete
+func (h *HostChunkProgress) IsComplete() bool {
+	return len(h.CompletedChunks) >= h.TotalChunks
 }

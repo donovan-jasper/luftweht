@@ -48,6 +48,13 @@ Examples:
 
 	// Timing flags
 	rootCmd.Flags().StringVarP(&cfg.Timing, "timing", "T", cfg.Timing, "Nmap timing template (T0-T5)")
+	var fast bool
+	rootCmd.Flags().BoolVar(&fast, "fast", false, "Use aggressive timing (T5) for faster scans")
+	rootCmd.PreRun = func(cmd *cobra.Command, args []string) {
+		if fast {
+			cfg.Timing = "T5"
+		}
+	}
 
 	// Concurrency flags
 	rootCmd.Flags().IntVar(&cfg.MinWorkers, "min-workers", cfg.MinWorkers, "Minimum concurrent workers")

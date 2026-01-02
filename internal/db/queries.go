@@ -540,3 +540,16 @@ func (db *DB) GetNewPortsForServiceDetection(hostID int64, afterTime time.Time) 
 
 	return ports, rows.Err()
 }
+
+// GetChunkProgressID retrieves the scan_progress ID for a specific chunk
+func (db *DB) GetChunkProgressID(hostID int64, scanType models.ScanType, portStart, portEnd int) (int64, error) {
+	var id int64
+	err := db.QueryRow(`
+		SELECT id FROM scan_progress
+		WHERE host_id = ? AND scan_type = ? AND port_start = ? AND port_end = ?
+	`, hostID, scanType, portStart, portEnd).Scan(&id)
+	if err != nil {
+		return 0, err
+	}
+	return id, nil
+}

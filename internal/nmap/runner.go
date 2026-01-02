@@ -104,20 +104,17 @@ func (r *Runner) ScanTCPChunk(ctx context.Context, host string, portStart, portE
 	portRange := fmt.Sprintf("%d-%d", portStart, portEnd)
 
 	args := []string{
-		"-Pn",          // Skip discovery
-		"-sS",          // SYN scan
+		"-Pn",             // Skip discovery
+		"-sS",             // SYN scan
 		"-p", portRange,
 		"-" + r.Timing,
+		"--max-retries", "1",
 		"-oX", "-",
 		host,
 	}
 
-	// Dynamic timeout based on range size
-	rangeSize := portEnd - portStart + 1
-	timeout := time.Duration(rangeSize/100+60) * time.Second
-	if timeout > 10*time.Minute {
-		timeout = 10 * time.Minute
-	}
+	// Long timeout for full port scans - slow hosts need time
+	timeout := 1 * time.Hour
 
 	return r.run(ctx, args, timeout)
 }
@@ -131,16 +128,13 @@ func (r *Runner) ScanUDPChunk(ctx context.Context, host string, portStart, portE
 		"-sU", // UDP scan
 		"-p", portRange,
 		"-" + r.Timing,
+		"--max-retries", "1",
 		"-oX", "-",
 		host,
 	}
 
-	// UDP is slower - longer timeout
-	rangeSize := portEnd - portStart + 1
-	timeout := time.Duration(rangeSize/50+120) * time.Second
-	if timeout > 20*time.Minute {
-		timeout = 20 * time.Minute
-	}
+	// UDP is much slower - very long timeout
+	timeout := 2 * time.Hour
 
 	return r.run(ctx, args, timeout)
 }
@@ -168,25 +162,28 @@ func (r *Runner) run(ctx context.Context, args []string, timeout time.Duration) 
 		fmt.Printf("[nmap] Completed in %s\n", duration)
 	}
 
-	if ctx.Err() == context.DeadlineExceeded {
+	timedOut := ctx.Err() == context.DeadlineExceeded
+
+	// Try to parse output even on timeout/error - nmap may have partial results
+	if stdout.Len() > 0 {
+		result, parseErr := ParseXML(stdout.Bytes())
+		if parseErr == nil && result != nil {
+			if timedOut && r.Verbose {
+				fmt.Printf("[nmap] Timed out but recovered partial results\n")
+			}
+			return result, nil
+		}
+	}
+
+	if timedOut {
 		return nil, fmt.Errorf("nmap scan timed out after %s", timeout)
 	}
 
 	if err != nil {
-		// nmap returns exit code 1 sometimes even on success
-		// Check if we got valid XML output
-		if stdout.Len() == 0 {
-			return nil, fmt.Errorf("nmap failed: %w\nstderr: %s", err, stderr.String())
-		}
+		return nil, fmt.Errorf("nmap failed: %w\nstderr: %s", err, stderr.String())
 	}
 
-	// Parse the XML output
-	result, err := ParseXML(stdout.Bytes())
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse nmap output: %w", err)
-	}
-
-	return result, nil
+	return nil, fmt.Errorf("nmap produced no output")
 }
 
 // CheckNmapInstalled verifies that nmap is available

@@ -541,6 +541,16 @@ func (o *Orchestrator) queueNextTCPChunk(hostID int64, chunkIndex int) {
 	}
 
 	chunk := chunks[chunkIndex]
+
+	// Look up the progress ID for this chunk
+	progressID, err := o.db.GetChunkProgressID(hostID, models.ScanTypeFullTCP, chunk.Start, chunk.End)
+	if err != nil {
+		if o.config.Verbose {
+			fmt.Printf("[DEBUG] queueNextTCPChunk: Failed to get progress ID for host %d chunk %d: %v\n", hostID, chunkIndex, err)
+		}
+		return
+	}
+
 	job := models.ChunkJob{
 		HostID:     hostID,
 		Host:       host,
@@ -548,6 +558,7 @@ func (o *Orchestrator) queueNextTCPChunk(hostID int64, chunkIndex int) {
 		PortStart:  chunk.Start,
 		PortEnd:    chunk.End,
 		Protocol:   "tcp",
+		ProgressID: progressID,
 	}
 
 	// Track this chunk as in-flight work
@@ -659,6 +670,16 @@ func (o *Orchestrator) queueNextUDPChunk(hostID int64, chunkIndex int) {
 	}
 
 	chunk := chunks[chunkIndex]
+
+	// Look up the progress ID for this chunk
+	progressID, err := o.db.GetChunkProgressID(hostID, models.ScanTypeFullUDP, chunk.Start, chunk.End)
+	if err != nil {
+		if o.config.Verbose {
+			fmt.Printf("[DEBUG] queueNextUDPChunk: Failed to get progress ID for host %d chunk %d: %v\n", hostID, chunkIndex, err)
+		}
+		return
+	}
+
 	job := models.ChunkJob{
 		HostID:     hostID,
 		Host:       host,
@@ -666,6 +687,7 @@ func (o *Orchestrator) queueNextUDPChunk(hostID int64, chunkIndex int) {
 		PortStart:  chunk.Start,
 		PortEnd:    chunk.End,
 		Protocol:   "udp",
+		ProgressID: progressID,
 	}
 
 	// Track this chunk as in-flight work
@@ -727,6 +749,17 @@ func (o *Orchestrator) fullTCPWorker() {
 			if len(ports) > 0 {
 				o.db.InsertPorts(ports)
 				atomic.AddInt32(&o.portsFound, int32(len(ports)))
+			}
+		}
+
+		// Mark chunk complete in database
+		if job.ProgressID > 0 {
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+				o.db.UpdateScanProgressStatus(job.ProgressID, models.ProgressStatusFailed, errMsg)
+			} else {
+				o.db.UpdateScanProgressStatus(job.ProgressID, models.ProgressStatusComplete, "")
 			}
 		}
 
@@ -808,6 +841,17 @@ func (o *Orchestrator) fullUDPWorker() {
 			if len(ports) > 0 {
 				o.db.InsertPorts(ports)
 				atomic.AddInt32(&o.portsFound, int32(len(ports)))
+			}
+		}
+
+		// Mark chunk complete in database
+		if job.ProgressID > 0 {
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+				o.db.UpdateScanProgressStatus(job.ProgressID, models.ProgressStatusFailed, errMsg)
+			} else {
+				o.db.UpdateScanProgressStatus(job.ProgressID, models.ProgressStatusComplete, "")
 			}
 		}
 

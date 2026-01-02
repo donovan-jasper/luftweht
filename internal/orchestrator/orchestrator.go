@@ -138,9 +138,13 @@ func (o *Orchestrator) Run(subnets []string) error {
 		}
 		o.tcpChunksInFlight.Wait() // Wait for all TCP chunks to complete
 		if o.config.Verbose {
-			fmt.Println("[DEBUG] All TCP chunks complete, closing fullTCPQueue")
+			fmt.Println("[DEBUG] All TCP chunks complete, closing fullTCPQueue and releasing UDP guard")
 		}
 		o.closeFullTCP.Do(func() { close(o.fullTCPQueue) })
+
+		// Now that TCP is done, release the UDP guard
+		// UDP chunks have been queued by fullTCPWorker, so the queue can now close when they finish
+		o.udpChunksInFlight.Done() // Release UDP guard
 	}()
 
 	// Goroutine to close fullUDPQueue when all UDP chunk work is done
@@ -167,9 +171,10 @@ func (o *Orchestrator) Run(subnets []string) error {
 	// Close TCP queue when discovery/queueing done
 	close(o.tcpQueue)
 
-	// Release guards - pipeline setup is complete, channels can close when all work is done
+	// Release TCP guard - pipeline setup is complete
+	// Note: UDP guard is released when TCP completes (in the TCP closure goroutine)
+	// because UDP chunks are only queued after TCP chunks finish
 	o.tcpChunksInFlight.Done() // Release TCP guard
-	o.udpChunksInFlight.Done() // Release UDP guard
 
 	// Wait for all workers
 	o.wg.Wait()
@@ -665,18 +670,30 @@ func (o *Orchestrator) queueNextUDPChunk(hostID int64, chunkIndex int) {
 
 	// Track this chunk as in-flight work
 	o.udpChunksInFlight.Add(1)
+	if o.config.Verbose {
+		fmt.Printf("[DEBUG] queueNextUDPChunk: Adding UDP chunk %d for host %d (udpChunksInFlight++)\n", chunkIndex, hostID)
+	}
 
 	// Safely send to channel (handle potential closed channel)
 	defer func() {
 		if r := recover(); r != nil {
 			// Channel was closed - scan is shutting down
+			if o.config.Verbose {
+				fmt.Printf("[DEBUG] queueNextUDPChunk: PANIC caught! Channel closed for chunk %d host %d\n", chunkIndex, hostID)
+			}
 			o.udpChunksInFlight.Done() // Still decrement counter
 		}
 	}()
 
 	select {
 	case o.fullUDPQueue <- job:
+		if o.config.Verbose {
+			fmt.Printf("[DEBUG] queueNextUDPChunk: Successfully queued UDP chunk %d for host %d\n", chunkIndex, hostID)
+		}
 	case <-o.ctx.Done():
+		if o.config.Verbose {
+			fmt.Printf("[DEBUG] queueNextUDPChunk: Context cancelled while queueing chunk %d for host %d\n", chunkIndex, hostID)
+		}
 		o.udpChunksInFlight.Done() // Decrement if cancelled
 		return
 	}

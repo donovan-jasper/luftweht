@@ -7,9 +7,14 @@ interface Host {
   hostname: string
   subnet: string
   status: string
+  os_guess: string
+  os_type: string      // Manual override: windows, linux, router, or empty
+  os_details: string   // Freeform: "Ubuntu 22.04", "Windows Server 2019", etc.
   discovered_at: string
   completed_at: string | null
   open_ports: number
+  comment_count: number
+  credential_count: number
 }
 
 interface Port {
@@ -21,6 +26,34 @@ interface Port {
   service: string
   version: string
   discovered_at: string
+}
+
+interface Comment {
+  id: number
+  host_id: number | null
+  content: string
+  author: string
+  created_at: string
+  updated_at: string
+}
+
+interface Credential {
+  id: number
+  host_id: number | null
+  username: string
+  password: string
+  hash: string
+  domain: string
+  cred_type: string
+  notes: string
+  created_at: string
+  updated_at: string
+}
+
+interface AuthStatus {
+  authenticated: boolean
+  auth_required: boolean
+  write_enabled: boolean
 }
 
 interface Stats {
@@ -35,6 +68,286 @@ interface Stats {
 
 // Cache for host ports (to enable port filtering)
 const hostPortsCache: Record<number, Port[]> = {}
+
+// OS Icon component - configurable size for host card icon and small badge
+const OSIcon = ({ os, size = 'sm' }: { os: string, size?: 'sm' | 'lg' }) => {
+  const isLarge = size === 'lg'
+  const containerClass = isLarge ? 'w-10 h-10 rounded-lg' : 'w-6 h-6 rounded'
+  const iconClass = isLarge ? 'w-5 h-5' : 'w-4 h-4'
+
+  if (os === 'windows') {
+    return (
+      <span className={`inline-flex items-center justify-center ${containerClass} bg-blue-500/20`} title="Windows">
+        <svg className={`${iconClass} text-blue-400`} viewBox="0 0 24 24" fill="currentColor">
+          <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.949"/>
+        </svg>
+      </span>
+    )
+  }
+
+  if (os === 'linux') {
+    return (
+      <span className={`inline-flex items-center justify-center ${containerClass} bg-amber-500/20`} title="Linux">
+        <svg className={`${iconClass} text-amber-400`} viewBox="0 0 256 256" fill="currentColor">
+          <path d="M128 12c-20 0-36 28-36 56 0 12 2 24 6 34-14 8-30 22-30 42 0 14 8 26 18 36-6 10-10 22-10 34 0 24 18 42 42 42h20c24 0 42-18 42-42 0-12-4-24-10-34 10-10 18-22 18-36 0-20-16-34-30-42 4-10 6-22 6-34 0-28-16-56-36-56zm-20 56c4 0 8 4 8 8s-4 8-8 8-8-4-8-8 4-8 8-8zm40 0c4 0 8 4 8 8s-4 8-8 8-8-4-8-8 4-8 8-8zm-20 24c8 0 14 6 14 12 0 4-6 8-14 8s-14-4-14-8c0-6 6-12 14-12z"/>
+        </svg>
+      </span>
+    )
+  }
+
+  if (os === 'router') {
+    return (
+      <span className={`inline-flex items-center justify-center ${containerClass} bg-purple-500/20`} title="Router/Network Device">
+        <svg className={`${iconClass} text-purple-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+        </svg>
+      </span>
+    )
+  }
+
+  // Unknown - green question mark
+  return (
+    <span className={`inline-flex items-center justify-center ${containerClass} bg-emerald-500/20`} title="Unknown OS">
+      <svg className={`${iconClass} text-emerald-400`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      </svg>
+    </span>
+  )
+}
+
+// Login Modal component
+const LoginModal = ({ onLogin }: { onLogin: (password: string) => Promise<boolean> }) => {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    const success = await onLogin(password)
+    if (!success) {
+      setError('Invalid password')
+    }
+    setLoading(false)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+      <div className="bg-slate-800 rounded-xl p-8 w-full max-w-md border border-slate-700 shadow-2xl">
+        <div className="text-center mb-6">
+          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center mx-auto mb-4">
+            <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold">Luftweht</h2>
+          <p className="text-slate-400 mt-1">Enter password to continue</p>
+        </div>
+        <form onSubmit={handleSubmit}>
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-center focus:outline-none focus:border-cyan-500"
+            autoFocus
+          />
+          {error && <p className="text-red-400 text-sm mt-2 text-center">{error}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full mt-4 py-3 bg-gradient-to-r from-cyan-500 to-blue-600 rounded-lg font-semibold hover:opacity-90 disabled:opacity-50"
+          >
+            {loading ? 'Logging in...' : 'Login'}
+          </button>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+// Comments Panel component
+const CommentsPanel = ({ hostId, authStatus }: { hostId: number | null, authStatus: AuthStatus }) => {
+  const [comments, setComments] = useState<Comment[]>([])
+  const [newComment, setNewComment] = useState('')
+  const [author, setAuthor] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const url = hostId ? `/api/comments?host_id=${hostId}` : '/api/comments?global=true'
+    fetch(url).then(r => r.json()).then(data => setComments(data || []))
+  }, [hostId])
+
+  const addComment = async () => {
+    if (!newComment.trim()) return
+    setLoading(true)
+    await fetch('/api/comments', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ host_id: hostId, content: newComment, author: author || 'Anonymous' })
+    })
+    setNewComment('')
+    const url = hostId ? `/api/comments?host_id=${hostId}` : '/api/comments?global=true'
+    const res = await fetch(url)
+    setComments(await res.json() || [])
+    setLoading(false)
+  }
+
+  const deleteComment = async (id: number) => {
+    await fetch(`/api/comments?id=${id}`, { method: 'DELETE' })
+    setComments(comments.filter(c => c.id !== id))
+  }
+
+  return (
+    <div className="p-4 bg-slate-900/50 border-t border-slate-700/50">
+      <h4 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+        </svg>
+        Comments ({comments.length})
+      </h4>
+      <div className="space-y-2 max-h-48 overflow-y-auto mb-3">
+        {comments.map(c => (
+          <div key={c.id} className="bg-slate-800/50 rounded-lg p-3 text-sm">
+            <div className="flex justify-between items-start">
+              <div>
+                <span className="font-medium text-cyan-400">{c.author || 'Anonymous'}</span>
+                <span className="text-slate-500 text-xs ml-2">{new Date(c.created_at).toLocaleString()}</span>
+              </div>
+              {authStatus.authenticated && (
+                <button onClick={() => deleteComment(c.id)} className="text-red-400 hover:text-red-300 text-xs">Delete</button>
+              )}
+            </div>
+            <p className="text-slate-300 mt-1">{c.content}</p>
+          </div>
+        ))}
+        {comments.length === 0 && <p className="text-slate-500 text-sm">No comments yet</p>}
+      </div>
+      {authStatus.authenticated && (
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={author}
+            onChange={(e) => setAuthor(e.target.value)}
+            placeholder="Name"
+            className="w-24 px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
+          />
+          <input
+            type="text"
+            value={newComment}
+            onChange={(e) => setNewComment(e.target.value)}
+            placeholder="Add a comment..."
+            className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
+            onKeyDown={(e) => e.key === 'Enter' && addComment()}
+          />
+          <button onClick={addComment} disabled={loading} className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 rounded text-sm disabled:opacity-50">
+            Add
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Credentials Panel component
+const CredentialsPanel = ({ hostId, authStatus }: { hostId: number | null, authStatus: AuthStatus }) => {
+  const [creds, setCreds] = useState<Credential[]>([])
+  const [showPasswords, setShowPasswords] = useState<Set<number>>(new Set())
+  const [showForm, setShowForm] = useState(false)
+  const [form, setForm] = useState({ username: '', password: '', hash: '', domain: '', cred_type: 'ssh', notes: '' })
+
+  useEffect(() => {
+    const url = hostId ? `/api/credentials?host_id=${hostId}` : '/api/credentials?global=true'
+    fetch(url).then(r => r.json()).then(data => setCreds(data || []))
+  }, [hostId])
+
+  const addCred = async () => {
+    await fetch('/api/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...form, host_id: hostId })
+    })
+    setForm({ username: '', password: '', hash: '', domain: '', cred_type: 'ssh', notes: '' })
+    setShowForm(false)
+    const url = hostId ? `/api/credentials?host_id=${hostId}` : '/api/credentials?global=true'
+    const res = await fetch(url)
+    setCreds(await res.json() || [])
+  }
+
+  const deleteCred = async (id: number) => {
+    await fetch(`/api/credentials?id=${id}`, { method: 'DELETE' })
+    setCreds(creds.filter(c => c.id !== id))
+  }
+
+  const togglePassword = (id: number) => {
+    const next = new Set(showPasswords)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setShowPasswords(next)
+  }
+
+  const credTypes = ['ssh', 'rdp', 'web', 'smb', 'database', 'other']
+
+  return (
+    <div className="p-4 bg-slate-900/50 border-t border-slate-700/50">
+      <h4 className="text-sm font-semibold text-slate-400 mb-3 flex items-center gap-2">
+        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+        </svg>
+        Credentials ({creds.length})
+      </h4>
+      <div className="space-y-2 max-h-48 overflow-y-auto mb-3">
+        {creds.map(c => (
+          <div key={c.id} className="bg-slate-800/50 rounded-lg p-3 text-sm">
+            <div className="flex justify-between items-start">
+              <div className="flex items-center gap-2">
+                <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs uppercase">{c.cred_type}</span>
+                <span className="font-mono text-cyan-400">{c.username}</span>
+                {c.domain && <span className="text-slate-500">@{c.domain}</span>}
+              </div>
+              {authStatus.authenticated && (
+                <button onClick={() => deleteCred(c.id)} className="text-red-400 hover:text-red-300 text-xs">Delete</button>
+              )}
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-slate-400">Pass:</span>
+              <span className="font-mono text-sm">{showPasswords.has(c.id) ? c.password : '••••••••'}</span>
+              <button onClick={() => togglePassword(c.id)} className="text-xs text-cyan-400 hover:text-cyan-300">
+                {showPasswords.has(c.id) ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {c.hash && <div className="text-xs text-slate-500 mt-1 font-mono truncate">Hash: {c.hash}</div>}
+            {c.notes && <div className="text-xs text-slate-400 mt-1">{c.notes}</div>}
+          </div>
+        ))}
+        {creds.length === 0 && <p className="text-slate-500 text-sm">No credentials stored</p>}
+      </div>
+      {authStatus.authenticated && (
+        showForm ? (
+          <div className="space-y-2 bg-slate-800/50 rounded-lg p-3">
+            <div className="grid grid-cols-2 gap-2">
+              <input type="text" placeholder="Username" value={form.username} onChange={e => setForm({...form, username: e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500" />
+              <input type="text" placeholder="Password" value={form.password} onChange={e => setForm({...form, password: e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500" />
+              <input type="text" placeholder="Domain" value={form.domain} onChange={e => setForm({...form, domain: e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500" />
+              <select value={form.cred_type} onChange={e => setForm({...form, cred_type: e.target.value})} className="px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500">
+                {credTypes.map(t => <option key={t} value={t}>{t.toUpperCase()}</option>)}
+              </select>
+            </div>
+            <input type="text" placeholder="Hash (optional)" value={form.hash} onChange={e => setForm({...form, hash: e.target.value})} className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500" />
+            <input type="text" placeholder="Notes" value={form.notes} onChange={e => setForm({...form, notes: e.target.value})} className="w-full px-2 py-1.5 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500" />
+            <div className="flex gap-2">
+              <button onClick={addCred} className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 rounded text-sm">Save</button>
+              <button onClick={() => setShowForm(false)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setShowForm(true)} className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm">+ Add Credential</button>
+        )
+      )}
+    </div>
+  )
+}
 
 const StatusBadge = ({ status, onClick, active }: { status: string, onClick?: () => void, active?: boolean }) => {
   const colors: Record<string, string> = {
@@ -67,10 +380,26 @@ const StatusBadge = ({ status, onClick, active }: { status: string, onClick?: ()
   )
 }
 
-const HostCard = ({ host, expanded, onToggle, highlightPort }: { host: Host, expanded: boolean, onToggle: () => void, highlightPort?: number }) => {
+const HostCard = ({ host, expanded, onToggle, highlightPort, authStatus, onHostUpdate }: { host: Host, expanded: boolean, onToggle: () => void, highlightPort?: number, authStatus: AuthStatus, onHostUpdate?: () => void }) => {
   const [ports, setPorts] = useState<Port[]>([])
   const [loading, setLoading] = useState(false)
   const [lastStatus, setLastStatus] = useState(host.status)
+  const [showComments, setShowComments] = useState(false)
+  const [showCreds, setShowCreds] = useState(false)
+  const [osType, setOsType] = useState(host.os_type || '')
+  const [osDetails, setOsDetails] = useState(host.os_details || '')
+  const [savingOs, setSavingOs] = useState(false)
+
+  const saveOsInfo = async () => {
+    setSavingOs(true)
+    await fetch('/api/hosts/update', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: host.id, os_type: osType, os_details: osDetails })
+    })
+    setSavingOs(false)
+    onHostUpdate?.()
+  }
 
   // Re-fetch ports when expanded OR when status changes (to get updated service info)
   useEffect(() => {
@@ -109,17 +438,32 @@ const HostCard = ({ host, expanded, onToggle, highlightPort }: { host: Host, exp
         onClick={onToggle}
       >
         <div className="flex items-center gap-4">
-          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${host.open_ports > 0 ? 'bg-emerald-500/20' : 'bg-slate-700/50'}`}>
-            <svg className={`w-5 h-5 ${host.open_ports > 0 ? 'text-emerald-400' : 'text-slate-500'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2" />
-            </svg>
-          </div>
+          <OSIcon os={host.os_type || host.os_guess} size="lg" />
           <div>
-            <div className="font-mono text-base font-semibold">{host.ip}</div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-base font-semibold">{host.ip}</span>
+              {host.os_details && <span className="text-xs text-slate-500">({host.os_details})</span>}
+            </div>
             {host.hostname && <div className="text-sm text-slate-500">{host.hostname}</div>}
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          {host.comment_count > 0 && (
+            <span className="px-2 py-1 bg-slate-700/50 text-slate-400 rounded text-xs flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+              </svg>
+              {host.comment_count}
+            </span>
+          )}
+          {host.credential_count > 0 && (
+            <span className="px-2 py-1 bg-purple-500/20 text-purple-400 rounded text-xs flex items-center gap-1">
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+              {host.credential_count}
+            </span>
+          )}
           {host.open_ports > 0 && (
             <span className="px-3 py-1.5 bg-emerald-500/20 text-emerald-400 rounded-lg text-sm font-semibold">
               {host.open_ports} open
@@ -177,13 +521,78 @@ const HostCard = ({ host, expanded, onToggle, highlightPort }: { host: Host, exp
               <p className="text-sm">No ports discovered yet</p>
             </div>
           )}
+
+          {/* OS Override Section */}
+          {authStatus.authenticated && (
+            <div className="p-3 border-t border-slate-700/50 bg-slate-800/30">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-slate-500 uppercase">OS Type:</label>
+                  <select
+                    value={osType}
+                    onChange={(e) => setOsType(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="px-2 py-1 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
+                  >
+                    <option value="">Auto-detect</option>
+                    <option value="windows">Windows</option>
+                    <option value="linux">Linux</option>
+                    <option value="router">Router/Network</option>
+                  </select>
+                </div>
+                <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                  <label className="text-xs text-slate-500 uppercase whitespace-nowrap">OS Details:</label>
+                  <input
+                    type="text"
+                    value={osDetails}
+                    onChange={(e) => setOsDetails(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    placeholder="e.g., Ubuntu 22.04, Windows Server 2019"
+                    className="flex-1 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); saveOsInfo() }}
+                  disabled={savingOs}
+                  className="px-3 py-1 bg-cyan-600 hover:bg-cyan-500 rounded text-sm disabled:opacity-50"
+                >
+                  {savingOs ? 'Saving...' : 'Save'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Toggle buttons for comments/credentials */}
+          <div className="flex gap-2 p-3 border-t border-slate-700/50 bg-slate-800/30">
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowComments(!showComments) }}
+              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 ${showComments ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+              </svg>
+              Comments
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); setShowCreds(!showCreds) }}
+              className={`px-3 py-1.5 rounded text-sm flex items-center gap-1.5 ${showCreds ? 'bg-purple-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+              </svg>
+              Credentials
+            </button>
+          </div>
+
+          {showComments && <CommentsPanel hostId={host.id} authStatus={authStatus} />}
+          {showCreds && <CredentialsPanel hostId={host.id} authStatus={authStatus} />}
         </div>
       )}
     </div>
   )
 }
 
-const SubnetSection = ({ subnet, hosts, highlightPort }: { subnet: string, hosts: Host[], highlightPort?: number }) => {
+const SubnetSection = ({ subnet, hosts, highlightPort, authStatus, onHostUpdate }: { subnet: string, hosts: Host[], highlightPort?: number, authStatus: AuthStatus, onHostUpdate?: () => void }) => {
   const [collapsed, setCollapsed] = useState(false)
   const [expandedHost, setExpandedHost] = useState<number | null>(null)
 
@@ -245,6 +654,8 @@ const SubnetSection = ({ subnet, hosts, highlightPort }: { subnet: string, hosts
               expanded={expandedHost === host.id}
               onToggle={() => setExpandedHost(expandedHost === host.id ? null : host.id)}
               highlightPort={highlightPort}
+              authStatus={authStatus}
+              onHostUpdate={onHostUpdate}
             />
           ))}
         </div>
@@ -273,12 +684,54 @@ function App() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [hosts, setHosts] = useState<Host[]>([])
   const [loading, setLoading] = useState(true)
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({ authenticated: false, auth_required: false, write_enabled: false })
+  const [showGlobalNotes, setShowGlobalNotes] = useState(false)
 
   // Filter states
   const [searchQuery, setSearchQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
   const [portFilter, setPortFilter] = useState('')
   const [hostsWithPort, setHostsWithPort] = useState<Set<number>>(new Set())
+
+  // Fetch auth status
+  const fetchAuthStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth-status')
+      const data = await res.json()
+      setAuthStatus(data)
+    } catch (err) {
+      console.error('Failed to fetch auth status:', err)
+    }
+  }, [])
+
+  // Handle login
+  const handleLogin = async (password: string): Promise<boolean> => {
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      })
+      if (res.ok) {
+        await fetchAuthStatus()
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('Login failed:', err)
+      return false
+    }
+  }
+
+  // Handle logout
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/logout', { method: 'POST' })
+      await fetchAuthStatus()
+    } catch (err) {
+      console.error('Logout failed:', err)
+    }
+  }
 
   const fetchData = useCallback(async () => {
     try {
@@ -298,6 +751,7 @@ function App() {
   }, [])
 
   useEffect(() => {
+    fetchAuthStatus()
     fetchData()
 
     // Set up SSE for real-time updates
@@ -321,7 +775,7 @@ function App() {
     }
 
     return () => eventSource.close()
-  }, [fetchData])
+  }, [fetchData, fetchAuthStatus])
 
   // Fetch hosts with specific port when port filter changes
   useEffect(() => {
@@ -420,8 +874,14 @@ function App() {
   const progressPercent = totalScans > 0 ? (stats!.scans_completed / totalScans) * 100 : 0
   const portNum = parseInt(portFilter)
 
+  // Show login modal if auth required but not authenticated
+  const showLogin = authStatus.auth_required && !authStatus.authenticated
+
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
+      {/* Login Modal */}
+      {showLogin && <LoginModal onLogin={handleLogin} />}
+
       {/* Header */}
       <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4">
@@ -437,15 +897,44 @@ function App() {
                 <p className="text-xs text-slate-500">Network Scanner</p>
               </div>
             </div>
-            {stats && stats.scans_pending > 0 && (
-              <div className="flex items-center gap-2 text-sm text-yellow-400">
-                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            <div className="flex items-center gap-4">
+              {stats && stats.scans_pending > 0 && (
+                <div className="flex items-center gap-2 text-sm text-yellow-400">
+                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Scanning...
+                </div>
+              )}
+              <button
+                onClick={() => setShowGlobalNotes(!showGlobalNotes)}
+                className={`px-3 py-2 rounded-lg text-sm flex items-center gap-2 transition-colors ${showGlobalNotes ? 'bg-cyan-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                Scanning in progress...
-              </div>
-            )}
+                Global Notes
+              </button>
+              <a
+                href="/api/backup"
+                className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 transition-colors flex items-center gap-2"
+                title="Download database backup"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Backup
+              </a>
+              {authStatus.authenticated && (
+                <button
+                  onClick={handleLogout}
+                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 transition-colors"
+                >
+                  Logout
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </header>
@@ -497,6 +986,25 @@ function App() {
               />
             </div>
             <div className="text-right text-xs text-slate-500 mt-1">{progressPercent.toFixed(1)}%</div>
+          </div>
+        )}
+
+        {/* Global Notes Panel */}
+        {showGlobalNotes && (
+          <div className="mb-8 bg-slate-800/60 rounded-xl border border-slate-700/50 overflow-hidden">
+            <div className="p-4 border-b border-slate-700/50">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Global Notes & Credentials
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">Notes and credentials not tied to specific hosts</p>
+            </div>
+            <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-700/50">
+              <CommentsPanel hostId={null} authStatus={authStatus} />
+              <CredentialsPanel hostId={null} authStatus={authStatus} />
+            </div>
           </div>
         )}
 
@@ -579,6 +1087,8 @@ function App() {
                 subnet={subnet}
                 hosts={subnetHosts}
                 highlightPort={portNum > 0 ? portNum : undefined}
+                authStatus={authStatus}
+                onHostUpdate={fetchData}
               />
             ))
         ) : (

@@ -52,6 +52,9 @@ func (db *DB) Migrate() error {
 		hostname TEXT,
 		subnet TEXT,
 		status TEXT DEFAULT 'discovered',
+		os_guess TEXT,
+		os_type TEXT,
+		os_details TEXT,
 		discovered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		completed_at DATETIME
 	);
@@ -87,11 +90,46 @@ func (db *DB) Migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_ports_state ON ports(state);
 	CREATE INDEX IF NOT EXISTS idx_scan_progress_status ON scan_progress(status);
 	CREATE INDEX IF NOT EXISTS idx_scan_progress_type ON scan_progress(scan_type);
+
+	-- Comments table (host_id NULL = global comment)
+	CREATE TABLE IF NOT EXISTS comments (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		host_id INTEGER REFERENCES hosts(id),
+		content TEXT NOT NULL,
+		author TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_comments_host ON comments(host_id);
+
+	-- Credentials table (host_id NULL = global credential)
+	CREATE TABLE IF NOT EXISTS credentials (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		host_id INTEGER REFERENCES hosts(id),
+		username TEXT,
+		password TEXT,
+		hash TEXT,
+		domain TEXT,
+		cred_type TEXT,
+		notes TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_credentials_host ON credentials(host_id);
 	`
 
 	_, err := db.Exec(schema)
 	if err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	// Add columns if they don't exist (for existing databases)
+	migrations := []string{
+		"ALTER TABLE hosts ADD COLUMN os_type TEXT",
+		"ALTER TABLE hosts ADD COLUMN os_details TEXT",
+	}
+	for _, m := range migrations {
+		db.Exec(m) // Ignore errors - column may already exist
 	}
 
 	return nil
@@ -128,7 +166,7 @@ func (db *DB) ClearAllData() error {
 	}
 	defer tx.Rollback()
 
-	tables := []string{"scan_progress", "ports", "hosts"}
+	tables := []string{"scan_progress", "ports", "comments", "credentials", "hosts"}
 	for _, table := range tables {
 		if _, err := tx.Exec("DELETE FROM " + table); err != nil {
 			return err

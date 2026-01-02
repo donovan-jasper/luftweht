@@ -1,6 +1,8 @@
 # Go build artifacts
 /luftweht
+/luftweht-viewer
 /scanner
+/releases/
 *.exe
 
 # Scan output directories
@@ -45,3 +47,4 @@ cidr-*.log
 
 # Sensitive files
 *.ovpn
+node_modules/

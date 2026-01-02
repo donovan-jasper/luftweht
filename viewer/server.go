@@ -88,6 +88,11 @@ type SSEClient struct {
 	events chan []byte
 }
 
+type Session struct {
+	Username string
+	Expiry   time.Time
+}
+
 type Server struct {
 	db          *sql.DB
 	dbPath      string
@@ -95,7 +100,7 @@ type Server struct {
 	clientsMux  sync.RWMutex
 	lastUpdate  time.Time
 	password    string                 // Empty means no auth required
-	sessions    map[string]time.Time   // Session token -> expiry time
+	sessions    map[string]Session     // Session token -> session data
 	sessionsMux sync.RWMutex
 }
 
@@ -116,7 +121,7 @@ func NewServer(dbPath string, password string) (*Server, error) {
 		dbPath:   dbPath,
 		clients:  make(map[string]*SSEClient),
 		password: password,
-		sessions: make(map[string]time.Time),
+		sessions: make(map[string]Session),
 	}
 
 	// Run migrations (will fail silently in read-only mode, but that's ok)
@@ -173,8 +178,8 @@ func (s *Server) cleanupSessions() {
 	for range ticker.C {
 		s.sessionsMux.Lock()
 		now := time.Now()
-		for token, expiry := range s.sessions {
-			if now.After(expiry) {
+		for token, session := range s.sessions {
+			if now.After(session.Expiry) {
 				delete(s.sessions, token)
 			}
 		}
@@ -202,19 +207,37 @@ func (s *Server) isAuthenticated(r *http.Request) bool {
 	}
 
 	s.sessionsMux.RLock()
-	expiry, exists := s.sessions[cookie.Value]
+	session, exists := s.sessions[cookie.Value]
 	s.sessionsMux.RUnlock()
 
-	if !exists || time.Now().After(expiry) {
+	if !exists || time.Now().After(session.Expiry) {
 		return false
 	}
 
 	// Refresh session on activity
 	s.sessionsMux.Lock()
-	s.sessions[cookie.Value] = time.Now().Add(24 * time.Hour)
+	session.Expiry = time.Now().Add(24 * time.Hour)
+	s.sessions[cookie.Value] = session
 	s.sessionsMux.Unlock()
 
 	return true
+}
+
+// getUsername returns the username for the current session
+func (s *Server) getUsername(r *http.Request) string {
+	cookie, err := r.Cookie("session")
+	if err != nil {
+		return ""
+	}
+
+	s.sessionsMux.RLock()
+	session, exists := s.sessions[cookie.Value]
+	s.sessionsMux.RUnlock()
+
+	if !exists {
+		return ""
+	}
+	return session.Username
 }
 
 // requireAuth wraps a handler to require authentication
@@ -541,7 +564,8 @@ func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"authenticated":  s.isAuthenticated(r),
 		"auth_required":  s.password != "",
-		"write_enabled": s.password != "",
+		"write_enabled":  s.password != "",
+		"username":       s.getUsername(r),
 	})
 }
 
@@ -553,6 +577,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	var req struct {
 		Password string `json:"password"`
+		Username string `json:"username"`
 	}
 
 	body, _ := io.ReadAll(r.Body)
@@ -563,9 +588,18 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Default username if not provided
+	username := req.Username
+	if username == "" {
+		username = "Anonymous"
+	}
+
 	token := generateToken()
 	s.sessionsMux.Lock()
-	s.sessions[token] = time.Now().Add(24 * time.Hour)
+	s.sessions[token] = Session{
+		Username: username,
+		Expiry:   time.Now().Add(24 * time.Hour),
+	}
 	s.sessionsMux.Unlock()
 
 	http.SetCookie(w, &http.Cookie{
@@ -578,7 +612,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "username": username})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {

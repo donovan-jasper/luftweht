@@ -54,6 +54,7 @@ interface AuthStatus {
   authenticated: boolean
   auth_required: boolean
   write_enabled: boolean
+  username: string
 }
 
 interface Stats {
@@ -73,24 +74,20 @@ const hostPortsCache: Record<number, Port[]> = {}
 const OSIcon = ({ os, size = 'sm' }: { os: string, size?: 'sm' | 'lg' }) => {
   const isLarge = size === 'lg'
   const containerClass = isLarge ? 'w-10 h-10 rounded-lg' : 'w-6 h-6 rounded'
-  const iconClass = isLarge ? 'w-5 h-5' : 'w-4 h-4'
+  const iconClass = isLarge ? 'w-6 h-6' : 'w-4 h-4'
 
   if (os === 'windows') {
     return (
       <span className={`inline-flex items-center justify-center ${containerClass} bg-blue-500/20`} title="Windows">
-        <svg className={`${iconClass} text-blue-400`} viewBox="0 0 24 24" fill="currentColor">
-          <path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-13.051-1.949"/>
-        </svg>
+        <img src="/windows.svg" alt="Windows" className={`${iconClass}`} style={{ filter: 'invert(55%) sepia(98%) saturate(1000%) hue-rotate(180deg) brightness(95%)' }} />
       </span>
     )
   }
 
   if (os === 'linux') {
     return (
-      <span className={`inline-flex items-center justify-center ${containerClass} bg-amber-500/20`} title="Linux">
-        <svg className={`${iconClass} text-amber-400`} viewBox="0 0 256 256" fill="currentColor">
-          <path d="M128 12c-20 0-36 28-36 56 0 12 2 24 6 34-14 8-30 22-30 42 0 14 8 26 18 36-6 10-10 22-10 34 0 24 18 42 42 42h20c24 0 42-18 42-42 0-12-4-24-10-34 10-10 18-22 18-36 0-20-16-34-30-42 4-10 6-22 6-34 0-28-16-56-36-56zm-20 56c4 0 8 4 8 8s-4 8-8 8-8-4-8-8 4-8 8-8zm40 0c4 0 8 4 8 8s-4 8-8 8-8-4-8-8 4-8 8-8zm-20 24c8 0 14 6 14 12 0 4-6 8-14 8s-14-4-14-8c0-6 6-12 14-12z"/>
-        </svg>
+      <span className={`inline-flex items-center justify-center ${containerClass} bg-slate-500/20`} title="Linux">
+        <img src="/linux.png" alt="Linux" className={`${iconClass}`} style={{ filter: 'grayscale(100%) brightness(0.8)' }} />
       </span>
     )
   }
@@ -116,8 +113,9 @@ const OSIcon = ({ os, size = 'sm' }: { os: string, size?: 'sm' | 'lg' }) => {
 }
 
 // Login Modal component
-const LoginModal = ({ onLogin }: { onLogin: (password: string) => Promise<boolean> }) => {
+const LoginModal = ({ onLogin }: { onLogin: (password: string, username: string) => Promise<boolean> }) => {
   const [password, setPassword] = useState('')
+  const [username, setUsername] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -125,7 +123,7 @@ const LoginModal = ({ onLogin }: { onLogin: (password: string) => Promise<boolea
     e.preventDefault()
     setLoading(true)
     setError('')
-    const success = await onLogin(password)
+    const success = await onLogin(password, username)
     if (!success) {
       setError('Invalid password')
     }
@@ -142,16 +140,23 @@ const LoginModal = ({ onLogin }: { onLogin: (password: string) => Promise<boolea
             </svg>
           </div>
           <h2 className="text-2xl font-bold">Luftweht</h2>
-          <p className="text-slate-400 mt-1">Enter password to continue</p>
+          <p className="text-slate-400 mt-1">Enter your name and password</p>
         </div>
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <input
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Your name"
+            className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-center focus:outline-none focus:border-cyan-500"
+            autoFocus
+          />
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
             className="w-full px-4 py-3 bg-slate-900 border border-slate-700 rounded-lg text-center focus:outline-none focus:border-cyan-500"
-            autoFocus
           />
           {error && <p className="text-red-400 text-sm mt-2 text-center">{error}</p>}
           <button
@@ -171,7 +176,6 @@ const LoginModal = ({ onLogin }: { onLogin: (password: string) => Promise<boolea
 const CommentsPanel = ({ hostId, authStatus }: { hostId: number | null, authStatus: AuthStatus }) => {
   const [comments, setComments] = useState<Comment[]>([])
   const [newComment, setNewComment] = useState('')
-  const [author, setAuthor] = useState('')
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
@@ -185,7 +189,7 @@ const CommentsPanel = ({ hostId, authStatus }: { hostId: number | null, authStat
     await fetch('/api/comments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ host_id: hostId, content: newComment, author: author || 'Anonymous' })
+      body: JSON.stringify({ host_id: hostId, content: newComment, author: authStatus.username || 'Anonymous' })
     })
     setNewComment('')
     const url = hostId ? `/api/comments?host_id=${hostId}` : '/api/comments?global=true'
@@ -225,14 +229,8 @@ const CommentsPanel = ({ hostId, authStatus }: { hostId: number | null, authStat
         {comments.length === 0 && <p className="text-slate-500 text-sm">No comments yet</p>}
       </div>
       {authStatus.authenticated && (
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            placeholder="Name"
-            className="w-24 px-2 py-1.5 bg-slate-800 border border-slate-700 rounded text-sm focus:outline-none focus:border-cyan-500"
-          />
+        <div className="flex gap-2 items-center">
+          <span className="text-xs text-slate-500">as {authStatus.username}:</span>
           <input
             type="text"
             value={newComment}
@@ -684,7 +682,7 @@ function App() {
   const [stats, setStats] = useState<Stats | null>(null)
   const [hosts, setHosts] = useState<Host[]>([])
   const [loading, setLoading] = useState(true)
-  const [authStatus, setAuthStatus] = useState<AuthStatus>({ authenticated: false, auth_required: false, write_enabled: false })
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({ authenticated: false, auth_required: false, write_enabled: false, username: '' })
   const [showGlobalNotes, setShowGlobalNotes] = useState(false)
 
   // Filter states
@@ -705,12 +703,12 @@ function App() {
   }, [])
 
   // Handle login
-  const handleLogin = async (password: string): Promise<boolean> => {
+  const handleLogin = async (password: string, username: string): Promise<boolean> => {
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ password, username })
       })
       if (res.ok) {
         await fetchAuthStatus()
@@ -927,12 +925,15 @@ function App() {
                 Backup
               </a>
               {authStatus.authenticated && (
-                <button
-                  onClick={handleLogout}
-                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 transition-colors"
-                >
-                  Logout
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-cyan-400">{authStatus.username}</span>
+                  <button
+                    onClick={handleLogout}
+                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm text-slate-300 transition-colors"
+                  >
+                    Logout
+                  </button>
+                </div>
               )}
             </div>
           </div>

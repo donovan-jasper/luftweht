@@ -1,19 +1,33 @@
-.PHONY: all clean frontend scanner viewer releases release-darwin-arm64 release-linux-amd64 release-linux-arm64
+.PHONY: all build clean frontend scanner viewer run-scanner run-viewer releases release-darwin-arm64 release-linux-amd64 release-linux-arm64
 
-# Default target
-all: frontend scanner viewer
+# Default target - build everything for local use
+all: build
+
+# Build both binaries for current platform
+build: frontend scanner viewer
+	@echo "Build complete: ./luftweht and ./luftweht-viewer"
 
 # Build frontend
 frontend:
 	cd viewer/frontend && npm install && npm run build
 
 # Build scanner for current platform
-scanner: frontend
+scanner:
 	go build -o luftweht ./cmd/scanner
 
 # Build viewer for current platform
 viewer: frontend
 	go build -o luftweht-viewer ./viewer
+
+# Run scanner (requires sudo for raw sockets)
+# Usage: make run-scanner ARGS="192.168.1.0/24 -d scan.db"
+run-scanner: scanner
+	sudo ./luftweht $(ARGS)
+
+# Run viewer
+# Usage: make run-viewer ARGS="-db scan.db -password test123"
+run-viewer: viewer
+	./luftweht-viewer $(ARGS)
 
 # Clean build artifacts
 clean:
